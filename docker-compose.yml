@@ -1,0 +1,18 @@
+# Infrastructure for TickForge Distributed.
+#
+# This file grows one service at a time, in the milestone that first needs
+# it - introducing a container before any code depends on it would violate
+# this project's own rule that every technology has to answer a real,
+# already-felt problem. Empty for now (Milestone 0). Planned additions:
+#
+#   Milestone 2 - kafka        (broker; single-node KRaft mode, no zookeeper)
+#   Milestone 3 - redis
+#   Milestone 4 - postgres
+#   Milestone 6 - the C++ services themselves, containerized, plus
+#                 healthchecks and depends_on wiring between all of the above
+#
+# See docs/architecture.md for the target topology this is building toward.
+
+name: tickforge-distributed
+
+services: {}
