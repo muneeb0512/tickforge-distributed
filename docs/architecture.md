@@ -292,7 +292,7 @@ tickforge-distributed/
 ├── CMakeLists.txt
 ├── .gitignore
 ├── .env.example
-├── docker-compose.yml       # empty services: {} - see file header
+├── docker-compose.yml       # kafka broker + topic-init (M2)
 ├── include/tickforge/
 │   ├── env.hpp
 │   ├── market_event.hpp
@@ -301,7 +301,12 @@ tickforge-distributed/
 │   ├── binance_trade_parser.hpp     # the one function that knows Binance's schema (M1)
 │   ├── event_recorder.hpp           # M1
 │   ├── replay_source.hpp            # M1
-│   └── live_source.hpp              # M1
+│   ├── live_source.hpp              # M1
+│   ├── bounded_queue.hpp            # generic BoundedQueue<T>, ported from Project 1 (M2)
+│   ├── event_publisher.hpp          # abstraction Kafka sits behind (M2)
+│   ├── ingestion_pipeline.hpp       # M2
+│   ├── kafka_event_producer.hpp     # M2
+│   └── kafka_event_consumer.hpp     # M2
 ├── src/
 │   ├── CMakeLists.txt
 │   ├── env.cpp
@@ -310,27 +315,44 @@ tickforge-distributed/
 │   ├── event_recorder.cpp
 │   ├── replay_source.cpp
 │   ├── live_source.cpp
-│   └── ingestion_demo_main.cpp      # runnable demo executable (M1)
+│   ├── ingestion_demo_main.cpp      # runnable demo executable, no Kafka (M1)
+│   ├── ingestion_pipeline.cpp       # M2
+│   ├── kafka_event_producer.cpp     # M2
+│   └── kafka_event_consumer.cpp     # M2
+├── services/                        # independently-run distributed components (M2)
+│   ├── CMakeLists.txt
+│   ├── ingestion/                   # WS/replay -> queue -> Kafka producer
+│   │   ├── CMakeLists.txt
+│   │   └── main.cpp
+│   └── consumer/                    # Kafka consumer demo
+│       ├── CMakeLists.txt
+│       └── main.cpp
+├── benchmarks/                      # (M2)
+│   ├── CMakeLists.txt
+│   └── queue_kafka_benchmark.cpp
 ├── tests/
 │   ├── CMakeLists.txt
 │   ├── env_test.cpp
 │   ├── binance_trade_parser_test.cpp
 │   ├── market_event_json_test.cpp
 │   ├── replay_source_test.cpp
-│   └── event_recorder_test.cpp
+│   ├── event_recorder_test.cpp
+│   ├── bounded_queue_test.cpp       # M2
+│   ├── ingestion_pipeline_test.cpp  # M2
+│   ├── fake_event_publisher.hpp     # M2, test-only
+│   └── fake_infinite_source.hpp     # M2, test-only
 ├── replay/
-│   └── README.md                    # capture format + how to record/replay
+│   ├── README.md                    # capture format + how to record/replay
+│   └── btcusdt_ethusdt_sample.jsonl # real captured fixture (M1)
 └── docs/
     ├── architecture.md              # this file
-    └── milestone-1-ingestion.md     # provider research, field mapping, design detail
+    ├── milestone-1-ingestion.md     # provider research, field mapping, design detail
+    └── milestone-2-queue-kafka.md   # queue/Kafka design detail
 ```
 
 Directories that don't exist yet, added when their milestone gives them
 real content (not created empty ahead of time):
 
-- `services/` - Milestone 2 onward, as ingestion/processor/query/historical
-  become independent executables instead of living entirely in `src/`.
-- `benchmarks/` - first real content around Milestone 2 or Milestone 7.
 - `integration/` - Milestone 6, deterministic multi-component tests.
 - `.github/workflows/` - Milestone 6, CI.
 
@@ -340,7 +362,7 @@ real content (not created empty ahead of time):
 |---|---|---|
 | 0 | Foundation | done |
 | 1 | Real market data + C++ WebSocket ingestion | done - `docs/milestone-1-ingestion.md` |
-| 2 | Bounded queue + Kafka | not started |
+| 2 | Bounded queue + Kafka | done - `docs/milestone-2-queue-kafka.md` |
 | 3 | Redis + TCP current-state service | not started |
 | 4 | PostgreSQL + historical data | not started |
 | 5 | Failure handling + observability | not started |
@@ -353,18 +375,16 @@ real content (not created empty ahead of time):
 Deliberately not decided yet, each because the milestone that needs the
 answer hasn't started:
 
-- **C++ Kafka client library** (librdkafka directly vs. a C++ wrapper) -
-  Milestone 2.
 - **Redis client library** (hiredis vs. redis-plus-plus) - Milestone 3.
 - **Postgres client library** (libpqxx is the natural default) -
   Milestone 4.
-- **Queue capacity and overflow policy for `BoundedQueue<MarketEvent>`** -
-  Milestone 2, once there's a second thread on the far end of it to reason
-  about (§5).
 
-Resolved this milestone: **market data provider** - Binance's public trade
-stream. Full comparison against the equities alternative (Finnhub) and the
-verified facts behind the choice are in `docs/milestone-1-ingestion.md` §1.
+Resolved so far:
+- **Market data provider** (Milestone 1) - Binance's public trade stream.
+  `docs/milestone-1-ingestion.md` §1.
+- **C++ Kafka client library** (Milestone 2) - librdkafka's C API
+  directly. **Queue capacity/overflow policy** (Milestone 2) - blocking,
+  capacity configurable per run. Both in `docs/milestone-2-queue-kafka.md`.
 
 ## 14. Decision log
 
@@ -389,3 +409,21 @@ verified facts behind the choice are in `docs/milestone-1-ingestion.md` §1.
   deterministic replay reproduces it exactly. One real bug was caught only
   by that manual run, not by any unit test - see
   `docs/milestone-1-ingestion.md` §5.
+- **2026-08-29/30 (Milestone 2)** - Selected librdkafka's C API directly
+  (over cppkafka/modern-cpp-kafka) and Apache's own `apache/kafka:4.3.1`
+  image (KRaft mode) for the Kafka broker. Introduced `services/` -
+  `services/ingestion` and `services/consumer` are the first two
+  genuinely independent, separately-run processes in this project,
+  sharing nothing but a Kafka topic. `BoundedQueue<T>` ported directly
+  from Project 1; `IngestionPipeline` deliberately mirrors
+  `MarketDataPipeline`'s `requestStop()`/`stop()` two-step shutdown
+  contract, including the same deadlock risk it exists to prevent
+  (verified by a dedicated test against a `FakeInfiniteSource`, not left
+  to chance). Full reasoning, alternatives, and measured results (39/39
+  tests, real live-Binance-to-consumer run, real backpressure
+  demonstration, real throughput numbers, a real Kafka-unavailable
+  failure test with recovery) - `docs/milestone-2-queue-kafka.md`.
+  Also surfaced a real environmental gap along the way: the Kafka broker
+  has no persistent volume, so a container recreation (which happened
+  once, after an abrupt machine power-off) silently drops all topic data
+  - documented, not yet fixed (`docs/milestone-2-queue-kafka.md` §10).

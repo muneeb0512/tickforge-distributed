@@ -15,15 +15,17 @@ shared hot state, and PostgreSQL for durable history.
 
 ## Status
 
-**Milestone 1 — Real market data + WebSocket ingestion.** A real,
-persistent WebSocket connection to Binance's public trade stream, parsed,
-validated, and normalized into `MarketEvent`, plus a deterministic
-replay/capture path for testing without a live connection. No Kafka, no
-Redis, no PostgreSQL yet - see [`docs/architecture.md`](docs/architecture.md)
-§12 for the full milestone roadmap and
-[`docs/milestone-1-ingestion.md`](docs/milestone-1-ingestion.md) for this
-milestone's design in detail (provider research, field mapping, reconnect
-design).
+**Milestone 2 — Bounded queue + Kafka.** Real Binance trades now flow
+WebSocket → bounded queue → Kafka producer → Kafka (3 partitions,
+partitioned by instrument) → Kafka consumer, as two independent processes
+(`services/ingestion`, `services/consumer`) sharing nothing but the topic.
+No Redis, no PostgreSQL yet - see
+[`docs/architecture.md`](docs/architecture.md) §12 for the full milestone
+roadmap, [`docs/milestone-1-ingestion.md`](docs/milestone-1-ingestion.md)
+for the WebSocket ingestion design, and
+[`docs/milestone-2-queue-kafka.md`](docs/milestone-2-queue-kafka.md) for
+the queue/Kafka design and real measured results (throughput, backpressure,
+a real Kafka-outage test).
 
 ## Architecture
 
@@ -59,46 +61,66 @@ Requires a C++20 compiler and CMake ≥ 3.20. `TICKFORGE_BUILD_TESTS`
 (default `ON`) fetches GoogleTest `v1.18.0` via `FetchContent` on first
 configure, matching Project 1's testing setup.
 
-As of Milestone 1, also requires (WSL2 Ubuntu, via apt):
+As of Milestone 2, also requires (WSL2 Ubuntu, via apt):
 
 ```bash
-sudo apt-get install -y libboost-dev libssl-dev nlohmann-json3-dev
+sudo apt-get install -y libboost-dev libssl-dev nlohmann-json3-dev librdkafka-dev
 ```
 
 `libboost-dev` provides Boost.Asio/Beast (WebSocket + TLS client, header-only
 usage - no Boost libraries are linked); `libssl-dev` is OpenSSL, for the TLS
 handshake; `nlohmann-json3-dev` is the JSON library used at the provider
-boundary. None of this needs an internet connection to build or run the
-test suite - only the live WebSocket path (see below) does.
+boundary; `librdkafka-dev` is the Kafka client (found via `pkg-config`, not
+a CMake config package). None of this needs an internet connection to build
+or run the `ctest` suite - only the live WebSocket path and anything
+touching a real Kafka broker (see below) does.
 
-## Running the ingestion demo
+## Running it
+
+**Ingestion only, no Kafka** (Milestone 1's demo - still valid, unchanged):
 
 ```bash
-# Live, default symbols (btcusdt, ethusdt) - needs internet:
-./build/src/tickforge_ingest_demo
-
-# Live, custom symbols, capturing a replay fixture as it runs:
-TICKFORGE_SYMBOLS=btcusdt,solusdt ./build/src/tickforge_ingest_demo --record replay/sample.jsonl
-
-# Deterministic replay from a captured fixture - no network required:
-./build/src/tickforge_ingest_demo --replay replay/sample.jsonl
+./build/src/tickforge_ingest_demo                              # live
+./build/src/tickforge_ingest_demo --record replay/sample.jsonl # live + capture
+./build/src/tickforge_ingest_demo --replay replay/sample.jsonl # deterministic, no network
 ```
 
-`Ctrl+C` triggers graceful shutdown (same signal-handling pattern as
-Project 1's server). See [`replay/README.md`](replay/README.md) for the
-capture file format.
+**Full distributed path** (Milestone 2 - needs Docker):
+
+```bash
+# Bring up Kafka (single-node KRaft broker + topic creation, idempotent):
+docker compose up -d
+
+# Terminal 1 - consumer:
+KAFKA_CONSUMER_GROUP=demo ./build/services/consumer/tickforge_consumer_service
+
+# Terminal 2 - ingestion (live Binance -> queue -> Kafka):
+./build/services/ingestion/tickforge_ingestion_service
+
+# Or, to see real backpressure: full-speed replay against a small queue
+./build/services/ingestion/tickforge_ingestion_service \
+    --replay replay/btcusdt_ethusdt_sample.jsonl --queue-capacity 8
+
+# Real throughput numbers (queue / Kafka producer / Kafka consumer):
+./build/benchmarks/tickforge_queue_kafka_benchmark
+```
+
+`Ctrl+C` triggers graceful shutdown everywhere (same signal-handling
+pattern as Project 1's server). See
+[`docs/milestone-2-queue-kafka.md`](docs/milestone-2-queue-kafka.md) §9 for
+more detail and §8 for what these actually produced when run for real.
 
 ## Configuration
 
 Copy [`.env.example`](.env.example) to `.env` and fill in values as later
 milestones introduce the things they configure (`.env` is gitignored - it
-is never committed). As of Milestone 1, `TICKFORGE_SYMBOLS` is the only
-variable actually read (comma-separated Binance stream symbols, lowercase;
-defaults to `btcusdt,ethusdt` if unset) - no API key is needed for this
-provider's public market-data streams.
+is never committed). Currently read: `TICKFORGE_SYMBOLS` (comma-separated
+Binance stream symbols, lowercase; defaults to `btcusdt,ethusdt` - no API
+key needed for this provider), `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC`,
+`KAFKA_CONSUMER_GROUP` (all default to values matching `docker-compose.yml`).
 
 ## Repository layout
 
 See [`docs/architecture.md`](docs/architecture.md) §11 for the current tree
-and what each future directory (`services/`, `benchmarks/`, `integration/`,
-`.github/workflows/`) is reserved for and when it appears.
+and what each future directory (`integration/`, `.github/workflows/`) is
+reserved for and when it appears.

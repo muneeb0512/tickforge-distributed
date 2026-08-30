@@ -19,9 +19,17 @@ find_package(Boost REQUIRED)       # header-only usage: Asio + Beast (WebSocket/
 find_package(OpenSSL REQUIRED)     # TLS for wss:// (Beast delegates the TLS handshake to it)
 find_package(nlohmann_json REQUIRED)
 
+# librdkafka ships a pkg-config file (rdkafka.pc), not a CMake config
+# package, on Ubuntu - pkg-config is the standard, documented way to
+# locate it.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(RDKAFKA REQUIRED IMPORTED_TARGET rdkafka)
+
 option(TICKFORGE_BUILD_TESTS "Build the GoogleTest test suite" ON)
 
 add_subdirectory(src)
+add_subdirectory(services)
+add_subdirectory(benchmarks)
 
 if(TICKFORGE_BUILD_TESTS)
     enable_testing()

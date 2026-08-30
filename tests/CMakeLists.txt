@@ -12,6 +12,8 @@ add_executable(tickforge_tests
     market_event_json_test.cpp
     replay_source_test.cpp
     event_recorder_test.cpp
+    bounded_queue_test.cpp
+    ingestion_pipeline_test.cpp
 )
 
 target_link_libraries(tickforge_tests PRIVATE

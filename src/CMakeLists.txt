@@ -5,6 +5,9 @@ add_library(tickforge_core
     event_recorder.cpp
     replay_source.cpp
     live_source.cpp
+    ingestion_pipeline.cpp
+    kafka_event_producer.cpp
+    kafka_event_consumer.cpp
 )
 
 target_include_directories(tickforge_core PUBLIC
@@ -17,6 +20,7 @@ target_link_libraries(tickforge_core PUBLIC
     OpenSSL::SSL
     OpenSSL::Crypto
     nlohmann_json::nlohmann_json
+    PkgConfig::RDKAFKA
 )
 
 add_executable(tickforge_ingest_demo
